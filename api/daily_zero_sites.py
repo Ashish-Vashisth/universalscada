@@ -487,42 +487,21 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def get_auth_diagnostics(self) -> dict:
+    def is_authorized(self) -> bool:
     expected_secret = os.environ.get("CRON_SECRET", "")
     authorization = self.headers.get("Authorization", "")
 
-    expected_secret_clean = expected_secret.strip()
-    authorization_clean = authorization.strip()
-
-    return {
-        "expected_secret_configured": bool(expected_secret),
-        "expected_secret_length": len(expected_secret),
-        "expected_secret_clean_length": len(expected_secret_clean),
-        "received_header_present": bool(authorization),
-        "received_header_length": len(authorization),
-        "received_header_clean_length": len(authorization_clean),
-        "received_bearer_prefix": authorization_clean.startswith("Bearer "),
-    }
-
-
-def is_authorized(self) -> bool:
-    expected_secret = os.environ.get("CRON_SECRET", "").strip()
-    authorization = self.headers.get("Authorization", "").strip()
-
     return (
         bool(expected_secret)
-        and authorization == f"Bearer {expected_secret}"
+        and authorization
+        == f"Bearer {expected_secret}"
     )
 
     def do_GET(self):
     if not self.is_authorized():
         self.send_json(
             401,
-            {
-                "ok": False,
-                "error": "Unauthorized",
-                "auth_diagnostics": self.get_auth_diagnostics(),
-            },
+            {"ok": False, "error": "Unauthorized"},
         )
         return
 
@@ -549,15 +528,10 @@ def is_authorized(self) -> bool:
                 },
             )
 
-    def do_POST(self):
-        if not self.is_authorized():
+    if not self.is_authorized():
     self.send_json(
         401,
-        {
-            "ok": False,
-            "error": "Unauthorized",
-            "auth_diagnostics": self.get_auth_diagnostics(),
-        },
+        {"ok": False, "error": "Unauthorized"},
     )
     return
 
