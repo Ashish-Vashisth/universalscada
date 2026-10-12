@@ -488,22 +488,22 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def is_authorized(self) -> bool:
-    expected_secret = os.environ.get("CRON_SECRET", "")
-    authorization = self.headers.get("Authorization", "")
+        expected_secret = os.environ.get("CRON_SECRET", "")
+        authorization = self.headers.get("Authorization", "")
 
-    return (
-        bool(expected_secret)
-        and authorization
-        == f"Bearer {expected_secret}"
-    )
+        return (
+            bool(expected_secret)
+            and authorization
+            == f"Bearer {expected_secret}"
+        )
 
     def do_GET(self):
-    if not self.is_authorized():
-        self.send_json(
-            401,
-            {"ok": False, "error": "Unauthorized"},
-        )
-        return
+        if not self.is_authorized():
+            self.send_json(
+                401,
+                {"ok": False, "error": "Unauthorized"},
+            )
+            return
 
         try:
             result = run_daily_collection()
@@ -528,12 +528,13 @@ class handler(BaseHTTPRequestHandler):
                 },
             )
 
-    if not self.is_authorized():
-    self.send_json(
-        401,
-        {"ok": False, "error": "Unauthorized"},
-    )
-    return
+    def do_POST(self):
+        if not self.is_authorized():
+            self.send_json(
+                401,
+                {"ok": False, "error": "Unauthorized"},
+            )
+            return
 
         try:
             content_length = int(
