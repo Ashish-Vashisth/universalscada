@@ -1,11 +1,35 @@
 import json
 import os
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 
 import resend
 
 
+ALLOWED_DISTRICTS = {
+    "ayodhya": {
+        "display_name": "Ayodhya",
+        "to_variable": "ALERT_EMAIL_TO_AYODHYA",
+        "cc_variable": "ALERT_EMAIL_CC_AYODHYA",
+    },
+    "sultanpur": {
+        "display_name": "Sultanpur",
+        "to_variable": "ALERT_EMAIL_TO_SULTANPUR",
+        "cc_variable": "ALERT_EMAIL_CC_SULTANPUR",
+    },
+    "deoria": {
+        "display_name": "Deoria",
+        "to_variable": "ALERT_EMAIL_TO_DEORIA",
+        "cc_variable": "ALERT_EMAIL_CC_DEORIA",
+    },
+}
+
+
 def split_email_addresses(value: str) -> list:
+    """
+    Converts comma-separated email addresses into a clean list.
+    """
+
     if not value:
         return []
 
@@ -14,6 +38,28 @@ def split_email_addresses(value: str) -> list:
         for email in value.split(",")
         if email.strip()
     ]
+
+
+def remove_duplicate_addresses(addresses: list) -> list:
+    """
+    Removes duplicate email addresses while preserving order.
+    Email matching is case-insensitive.
+    """
+
+    unique_addresses = []
+    seen_addresses = set()
+
+    for address in addresses:
+        normalized_address = address.strip().lower()
+
+        if (
+            normalized_address
+            and normalized_address not in seen_addresses
+        ):
+            seen_addresses.add(normalized_address)
+            unique_addresses.append(address.strip())
+
+    return unique_addresses
 
 
 class handler(BaseHTTPRequestHandler):
@@ -44,54 +90,12 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def get_auth_diagnostics(self) -> dict:
-        """
-        Temporary safe diagnostics.
-
-        This function does not return the actual CRON_SECRET
-        or the actual Authorization header.
-        """
-
-        expected_secret = os.environ.get(
-            "CRON_SECRET",
-            "",
-        ).strip()
-
-        authorization = self.headers.get(
-            "Authorization",
-            "",
-        ).strip()
-
-        expected_authorization = (
-            f"Bearer {expected_secret}"
-            if expected_secret
-            else ""
-        )
-
-        return {
-            "expected_secret_present": bool(
-                expected_secret
-            ),
-            "authorization_header_present": bool(
-                authorization
-            ),
-            "authorization_starts_with_bearer": (
-                authorization.startswith("Bearer ")
-            ),
-            "received_header_length": len(
-                authorization
-            ),
-            "expected_header_length": len(
-                expected_authorization
-            ),
-            "values_match": (
-                bool(expected_secret)
-                and authorization
-                == expected_authorization
-            ),
-        }
-
     def is_authorized(self) -> bool:
+        """
+        Checks whether the request contains the correct
+        CRON_SECRET as a Bearer token.
+        """
+
         expected_secret = os.environ.get(
             "CRON_SECRET",
             "",
@@ -101,17 +105,38 @@ class handler(BaseHTTPRequestHandler):
             "Authorization",
             "",
         ).strip()
-
-        expected_authorization = (
-            f"Bearer {expected_secret}"
-            if expected_secret
-            else ""
-        )
 
         return (
             bool(expected_secret)
             and authorization
-            == expected_authorization
+            == f"Bearer {expected_secret}"
+        )
+
+    def read_json_body(self) -> dict:
+        """
+        Reads and validates the JSON request body.
+        """
+
+        content_length_value = self.headers.get(
+            "Content-Length",
+            "0",
+        )
+
+        try:
+            content_length = int(content_length_value)
+        except ValueError:
+            content_length = 0
+
+        if content_length <= 0:
+            return {}
+
+        raw_body = self.rfile.read(content_length)
+
+        if not raw_body:
+            return {}
+
+        return json.loads(
+            raw_body.decode("utf-8")
         )
 
     def do_GET(self):
@@ -119,9 +144,7 @@ class handler(BaseHTTPRequestHandler):
             405,
             {
                 "ok": False,
-                "error": (
-                    "Method not allowed. Use POST."
-                ),
+                "error": "Method not allowed. Use POST.",
             },
         )
 
@@ -132,14 +155,77 @@ class handler(BaseHTTPRequestHandler):
                 {
                     "ok": False,
                     "error": "Unauthorized",
-                    "diagnostics": (
-                        self.get_auth_diagnostics()
-                    ),
                 },
             )
             return
 
         try:
+            request_data = self.read_json_body()
+
+            district_input = str(
+                request_data.get(
+                    "district",
+                    "",
+                )
+            ).strip()
+
+            if not district_input:
+                self.send_json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": (
+                            "The district field is required."
+                        ),
+                        "allowed_districts": [
+                            "Ayodhya",
+                            "Sultanpur",
+                            "Deoria",
+                        ],
+                    },
+                )
+                return
+
+            district_key = district_input.lower()
+
+            if district_key not in ALLOWED_DISTRICTS:
+                self.send_json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": (
+                            "The district is not supported."
+                        ),
+                        "received_district": district_input,
+                        "allowed_districts": [
+                            "Ayodhya",
+                            "Sultanpur",
+                            "Deoria",
+                        ],
+                    },
+                )
+                return
+
+            district_configuration = (
+                ALLOWED_DISTRICTS[district_key]
+            )
+
+            district = district_configuration[
+                "display_name"
+            ]
+
+            report_date = str(
+                request_data.get(
+                    "report_date",
+                    "",
+                )
+            ).strip()
+
+            if not report_date:
+                report_date = datetime.now().strftime(
+                    "%d %B %Y"
+                )
+
             resend_api_key = os.environ.get(
                 "RESEND_API_KEY",
                 "",
@@ -150,24 +236,61 @@ class handler(BaseHTTPRequestHandler):
                 "",
             ).strip()
 
+            reply_to = os.environ.get(
+                "ALERT_EMAIL_REPLY_TO",
+                "",
+            ).strip()
+
+            district_to_variable = (
+                district_configuration["to_variable"]
+            )
+
+            district_cc_variable = (
+                district_configuration["cc_variable"]
+            )
+
             email_to = split_email_addresses(
                 os.environ.get(
-                    "ALERT_EMAIL_TO",
+                    district_to_variable,
                     "",
                 )
             )
 
-            email_cc = split_email_addresses(
+            common_cc = split_email_addresses(
                 os.environ.get(
                     "ALERT_EMAIL_CC",
                     "",
                 )
             )
 
-            reply_to = os.environ.get(
-                "ALERT_EMAIL_REPLY_TO",
-                "",
-            ).strip()
+            district_specific_cc = (
+                split_email_addresses(
+                    os.environ.get(
+                        district_cc_variable,
+                        "",
+                    )
+                )
+            )
+
+            email_to = remove_duplicate_addresses(
+                email_to
+            )
+
+            email_cc = remove_duplicate_addresses(
+                common_cc + district_specific_cc
+            )
+
+            to_addresses_lowercase = {
+                address.lower()
+                for address in email_to
+            }
+
+            email_cc = [
+                address
+                for address in email_cc
+                if address.lower()
+                not in to_addresses_lowercase
+            ]
 
             missing_variables = []
 
@@ -183,7 +306,7 @@ class handler(BaseHTTPRequestHandler):
 
             if not email_to:
                 missing_variables.append(
-                    "ALERT_EMAIL_TO"
+                    district_to_variable
                 )
 
             if missing_variables:
@@ -195,6 +318,7 @@ class handler(BaseHTTPRequestHandler):
                             "Required environment variables "
                             "are missing."
                         ),
+                        "district": district,
                         "missing_variables": (
                             missing_variables
                         ),
@@ -203,9 +327,6 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             resend.api_key = resend_api_key
-
-            district = "Ayodhya"
-            report_date = "13 October 2026"
 
             subject = (
                 "Achievement Update: "
@@ -293,12 +414,25 @@ class handler(BaseHTTPRequestHandler):
                         "Test achievement email "
                         "submitted successfully."
                     ),
+                    "district": district,
+                    "report_date": report_date,
                     "email_provider_id": provider_id,
                     "to_recipient_count": len(
                         email_to
                     ),
                     "cc_recipient_count": len(
                         email_cc
+                    ),
+                },
+            )
+
+        except json.JSONDecodeError:
+            self.send_json(
+                400,
+                {
+                    "ok": False,
+                    "error": (
+                        "Invalid JSON request body."
                     ),
                 },
             )
