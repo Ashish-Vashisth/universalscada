@@ -37,22 +37,41 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def is_authorized(self) -> bool:
-        expected_secret = os.environ.get(
-            "CRON_SECRET",
-            "",
-        ).strip()
+    def get_auth_diagnostics(self) -> dict:
+    expected_secret = os.environ.get(
+        "CRON_SECRET",
+        "",
+    ).strip()
 
-        authorization = self.headers.get(
-            "Authorization",
-            "",
-        ).strip()
+    authorization = self.headers.get(
+        "Authorization",
+        "",
+    ).strip()
 
-        return (
+    expected_header = (
+        f"Bearer {expected_secret}"
+        if expected_secret
+        else ""
+    )
+
+    return {
+        "expected_secret_present": bool(expected_secret),
+        "authorization_header_present": bool(authorization),
+        "authorization_starts_with_bearer": (
+            authorization.startswith("Bearer ")
+        ),
+        "received_header_length": len(authorization),
+        "expected_header_length": len(expected_header),
+        "values_match": (
             bool(expected_secret)
-            and authorization
-            == f"Bearer {expected_secret}"
-        )
+            and authorization == expected_header
+        ),
+    }
+
+
+def is_authorized(self) -> bool:
+    diagnostics = self.get_auth_diagnostics()
+    return diagnostics["values_match"]
 
     def do_GET(self):
         self.send_json(
@@ -65,14 +84,17 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self.is_authorized():
-            self.send_json(
-                401,
-                {
-                    "ok": False,
-                    "error": "Unauthorized",
-                },
-            )
-            return
+    self.send_json(
+        401,
+        {
+            "ok": False,
+            "error": "Unauthorized",
+            "diagnostics": (
+                self.get_auth_diagnostics()
+            ),
+        },
+    )
+    return
 
         try:
             resend_api_key = os.environ.get(
