@@ -18,7 +18,11 @@ def split_email_addresses(value: str) -> list:
 
 class handler(BaseHTTPRequestHandler):
 
-    def send_json(self, status_code: int, payload: dict):
+    def send_json(
+        self,
+        status_code: int,
+        payload: dict,
+    ):
         body = json.dumps(
             payload,
             ensure_ascii=False,
@@ -26,16 +30,66 @@ class handler(BaseHTTPRequestHandler):
         ).encode("utf-8")
 
         self.send_response(status_code)
+
         self.send_header(
             "Content-Type",
             "application/json; charset=utf-8",
         )
+
         self.send_header(
             "Content-Length",
             str(len(body)),
         )
+
         self.end_headers()
         self.wfile.write(body)
+
+    def get_auth_diagnostics(self) -> dict:
+        """
+        Temporary safe diagnostics.
+
+        This function does not return the actual CRON_SECRET
+        or the actual Authorization header.
+        """
+
+        expected_secret = os.environ.get(
+            "CRON_SECRET",
+            "",
+        ).strip()
+
+        authorization = self.headers.get(
+            "Authorization",
+            "",
+        ).strip()
+
+        expected_authorization = (
+            f"Bearer {expected_secret}"
+            if expected_secret
+            else ""
+        )
+
+        return {
+            "expected_secret_present": bool(
+                expected_secret
+            ),
+            "authorization_header_present": bool(
+                authorization
+            ),
+            "authorization_starts_with_bearer": (
+                authorization.startswith("Bearer ")
+            ),
+            "received_header_length": len(
+                authorization
+            ),
+            "expected_header_length": len(
+                expected_authorization
+            ),
+            "values_match": (
+                bool(expected_secret)
+                and authorization
+                == expected_authorization
+            ),
+        }
 
     def is_authorized(self) -> bool:
         expected_secret = os.environ.get(
@@ -48,10 +102,16 @@ class handler(BaseHTTPRequestHandler):
             "",
         ).strip()
 
+        expected_authorization = (
+            f"Bearer {expected_secret}"
+            if expected_secret
+            else ""
+        )
+
         return (
             bool(expected_secret)
             and authorization
-            == f"Bearer {expected_secret}"
+            == expected_authorization
         )
 
     def do_GET(self):
@@ -59,7 +119,9 @@ class handler(BaseHTTPRequestHandler):
             405,
             {
                 "ok": False,
-                "error": "Method not allowed. Use POST.",
+                "error": (
+                    "Method not allowed. Use POST."
+                ),
             },
         )
 
@@ -70,6 +132,9 @@ class handler(BaseHTTPRequestHandler):
                 {
                     "ok": False,
                     "error": "Unauthorized",
+                    "diagnostics": (
+                        self.get_auth_diagnostics()
+                    ),
                 },
             )
             return
