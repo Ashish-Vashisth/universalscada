@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler
 import resend
 
 
-def split_email_addresses(value: str) -> list[str]:
+def split_email_addresses(value: str) -> listif not value:
     if not value:
         return []
 
