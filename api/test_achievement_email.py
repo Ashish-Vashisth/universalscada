@@ -6,7 +6,6 @@ import resend
 
 
 def split_email_addresses(value: str) -> listif not value:
-    if not value:
         return []
 
     return [
@@ -161,7 +160,7 @@ class handler(BaseHTTPRequestHandler):
                 "Instrumentation & Automation Team"
             )
 
-   ml_body = f"""
+            html_body = f"""
             <div style="
                 font-family: Arial, Helvetica, sans-serif;
                 font-size: 15px;
