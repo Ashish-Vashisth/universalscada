@@ -329,17 +329,17 @@ class handler(BaseHTTPRequestHandler):
             resend.api_key = resend_api_key
 
             subject = (
-                "Achievement Update: "
+                "Achievement Update - JJM SWSM: "
                 f"{district} Achieved Zero "
                 "Inactive/Disconnected Sites"
             )
 
             text_body = (
                 "Dear Team,\n\n"
-                "Achievement Update-JJM SWSM: "
-                f"{district} district has successfully achieved a "
-                "Zero/Inactive/Disconnected OHT "
-                f"bringing the count down to '0' {report_date}.\n\n"
+                "Achievement Update - JJM SWSM: "
+                f"{district} district has achieved a "
+                "Zero/Inactive or Disconnected Site "
+                f"count of '0' dated {report_date}.\n\n"
                 "This is an automatically generated "
                 "notification based on the daily "
                 "monitoring report.\n\n"
@@ -357,7 +357,7 @@ class handler(BaseHTTPRequestHandler):
                 <p>Dear Team,</p>
 
                 <p>
-                    <strong>Achievement Update:</strong>
+                    <strong>Achievement Update - JJM SWSM:</strong>
                     {district} district has achieved a
                     Zero/Inactive or Disconnected Site
                     count of <strong>'0'</strong> dated
