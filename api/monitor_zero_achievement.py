@@ -135,9 +135,7 @@ def notification_already_sent(
             f"{response.text}"
         )
 
-    records = response.json()
-
-    return bool(records)
+    return bool(response.json())
 
 
 def save_notification_marker(
@@ -153,6 +151,7 @@ def save_notification_marker(
     endpoint = (
         f"{supabase_url}/rest/v1/"
         "email_notification_history"
+        "?on_conflict=alert_date,alert_type,district"
     )
 
     headers = get_supabase_headers(
@@ -160,8 +159,8 @@ def save_notification_marker(
     )
 
     headers["Prefer"] = (
-        "return=minimal,"
-        "resolution=ignore-duplicates"
+        "resolution=ignore-duplicates,"
+        "return=minimal"
     )
 
     payload = {
@@ -190,7 +189,7 @@ def save_notification_marker(
 def send_achievement_email(
     district_key: str,
     report_date_display: str,
-):
+) -> dict:
     configuration = DISTRICT_CONFIG[
         district_key
     ]
@@ -370,6 +369,11 @@ def send_achievement_email(
             None,
         )
 
+    if not provider_id:
+        raise RuntimeError(
+            "Resend did not return an email provider ID."
+        )
+
     return {
         "provider_id": provider_id,
         "to_recipient_count": len(email_to),
@@ -389,4 +393,229 @@ def run_zero_achievement_monitor() -> dict:
     )
 
     result = {
-        "alert_date": alert_date
+        "alert_date": alert_date,
+        "report_date": report_date_display,
+        "alert_type": "ZERO_ACHIEVEMENT",
+        "districts": {},
+        "emails_sent": 0,
+        "emails_skipped": 0,
+        "failure_count": 0,
+    }
+
+    for district_key, district_url in (
+        DISTRICT_URLS.items()
+    ):
+        district_result = {
+            "district": district_key,
+        }
+
+        try:
+            source_df = read_source_from_url(
+                district_url
+            )
+
+            zero_df = build_zero_sites(
+                source_df
+            )
+
+            zero_inactive_count = len(
+                zero_df
+            )
+
+            district_result[
+                "zero_inactive_count"
+            ] = zero_inactive_count
+
+            if zero_inactive_count != 0:
+                district_result["status"] = (
+                    "NO_ACHIEVEMENT"
+                )
+
+                district_result["message"] = (
+                    "The ZERO/INACTIVE SITES "
+                    "count has not reached zero."
+                )
+
+                result["emails_skipped"] += 1
+                result["districts"][
+                    district_key
+                ] = district_result
+
+                continue
+
+            already_sent = (
+                notification_already_sent(
+                    alert_date=alert_date,
+                    alert_type=(
+                        "ZERO_ACHIEVEMENT"
+                    ),
+                    district=district_key,
+                )
+            )
+
+            if already_sent:
+                district_result["status"] = (
+                    "ALREADY_SENT"
+                )
+
+                district_result["message"] = (
+                    "Today's achievement email "
+                    "has already been sent."
+                )
+
+                result["emails_skipped"] += 1
+                result["districts"][
+                    district_key
+                ] = district_result
+
+                continue
+
+            email_result = send_achievement_email(
+                district_key=district_key,
+                report_date_display=(
+                    report_date_display
+                ),
+            )
+
+            save_notification_marker(
+                alert_date=alert_date,
+                alert_type="ZERO_ACHIEVEMENT",
+                district=district_key,
+                email_provider_id=(
+                    email_result["provider_id"]
+                ),
+            )
+
+            district_result["status"] = (
+                "EMAIL_SENT"
+            )
+
+            district_result[
+                "email_provider_id"
+            ] = email_result["provider_id"]
+
+            district_result[
+                "to_recipient_count"
+            ] = email_result[
+                "to_recipient_count"
+            ]
+
+            district_result[
+                "cc_recipient_count"
+            ] = email_result[
+                "cc_recipient_count"
+            ]
+
+            result["emails_sent"] += 1
+
+        except Exception as exc:
+            district_result["status"] = "FAILED"
+
+            district_result["error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+
+            result["failure_count"] += 1
+
+        result["districts"][
+            district_key
+        ] = district_result
+
+    return result
+
+
+class handler(BaseHTTPRequestHandler):
+
+    def send_json(
+        self,
+        status_code: int,
+        payload: dict,
+    ):
+        body = json.dumps(
+            payload,
+            ensure_ascii=False,
+            default=str,
+        ).encode("utf-8")
+
+        self.send_response(status_code)
+
+        self.send_header(
+            "Content-Type",
+            "application/json; charset=utf-8",
+        )
+
+        self.send_header(
+            "Content-Length",
+            str(len(body)),
+        )
+
+        self.end_headers()
+        self.wfile.write(body)
+
+    def is_authorized(self) -> bool:
+        expected_secret = os.environ.get(
+            "CRON_SECRET",
+            "",
+        ).strip()
+
+        authorization = self.headers.get(
+            "Authorization",
+            "",
+        ).strip()
+
+        return (
+            bool(expected_secret)
+            and authorization
+            == f"Bearer {expected_secret}"
+        )
+
+    def execute_monitor(self):
+        if not self.is_authorized():
+            self.send_json(
+                401,
+                {
+                    "ok": False,
+                    "error": "Unauthorized",
+                },
+            )
+            return
+
+        try:
+            result = (
+                run_zero_achievement_monitor()
+            )
+
+            status_code = (
+                200
+                if result["failure_count"] == 0
+                else 207
+            )
+
+            self.send_json(
+                status_code,
+                {
+                    "ok": (
+                        result["failure_count"]
+                        == 0
+                    ),
+                    **result,
+                },
+            )
+
+        except Exception as exc:
+            self.send_json(
+                500,
+                {
+                    "ok": False,
+                    "error": (
+                        f"{type(exc).__name__}: "
+                        f"{exc}"
+                    ),
+                },
+            )
+
+    def do_GET(self):
+        self.execute_monitor()
+
+    def do_POST(self):
+        self.execute_monitor()
